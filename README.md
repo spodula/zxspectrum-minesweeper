@@ -1,6 +1,4 @@
-#Specminesweeper
-
-This is a simple game written in Z80 assembly code for the ZX spectrum.
+This is a simple game written in Z80 assembly code for the ZX Spectrum.
 It is not that complicated and was mainly used to test my interrupt-driven mouse driver.
 
 Required dependancies:
