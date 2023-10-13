@@ -1,0 +1,21 @@
+##################################################################
+#disk build script for minesweeper
+##################################################################
+
+new DSK msweeper.dsk
+
+add ./out/mouse.bin mouse.bin code codeload=48640
+add ./out/msweeper.bin msweeper.bin code codeload=38400
+add ./assets/msweeper.scr msweeper.scr code codeload=16384
+add ./assets/disk.bas disk text line=1
+
+cat
+
+new TAP msweeper.tap
+add ./assets/Minesweep Minesweep text line=1
+add ./assets/msweeper.scr mscr code codeload=16384
+add ./assets/msweeper.scr mscr1 code codeload=16384
+add ./out/mouse.bin mousebin code codeload=48640
+add ./out/msweeper.bin msweepbin code codeload=38400
+
+
