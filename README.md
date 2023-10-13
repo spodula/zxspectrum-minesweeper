@@ -9,7 +9,7 @@ the build script uses:
     * The latest version of SpecHDDFileEditor found at https://github.com/spodula/SpecHDDFileEditor/releases (Just download the JAR file to the folder, rename it to HDDFileEditor)
 
 Building:
-When the above is done, just run compile.sh to generate a DSK and TAP files.
+just CD to the downloaded folder and run compile.sh to generate a DSK and TAP files.
 
 Should run on any 48/128k Spectrum or emulator.
 
