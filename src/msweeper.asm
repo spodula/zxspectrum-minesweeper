@@ -72,6 +72,7 @@ mouse_buttons:  equ $bc16 ;Return Mouse button state in A
 mouse_x:        equ $bc24 ;X position of mouse (pixels)
 mouse_y:        equ $bc23 ;Y position of the mouse (Pixels)
 mouse_input:    equ $bc25 ;Mouse input method
+mouse_keys:     equ $bc26 ;defined Keys used.
 
 ;*********************************************************
 ;Program entry point.
@@ -79,9 +80,9 @@ mouse_input:    equ $bc25 ;Mouse input method
 org $9600
     call fixupMinescreen    ;hack the background screen so the cursor shows up
 
+Go_again_ask_input:
     call CLEARSCREEN
     call AskInputMethod     ;Ask and set input method
-
 Go_again:
     call CLEARSCREEN
     CALL AskDifficultyLevel ;Ask for difficulty.
@@ -487,7 +488,7 @@ div10loop:
     call DisplayBlock
     ret    
 ;**********************************************************
-;Display a message on the screen. (
+;Display a message on the screen.
 ; Message after call, terminated with $FF
 ;**********************************************************
 display_message:
@@ -725,7 +726,7 @@ leftrightloop:
     ret
 
 ;**********************************************************
-; Display an ascii character A at DE B = attribute
+; Display an ascii character A at DE. B = attribute
 ;**********************************************************
 DisplayASCII:
     push bc
@@ -936,10 +937,10 @@ MINE_CHARACTERS:
 
 ;*************************************************************
 ;*************************************************************
-VARS:
+DrawBoxVARS:
     defb 0,0,0,0
 DRAWBOX:
-    ld IX,VARS
+    ld IX,DrawBoxVARS
     ld (IX+0),d
     ld (IX+1),e
     ld (IX+2),b
@@ -1186,13 +1187,14 @@ ADL_boxes:
     defb $05,$03,$05,25,0       ;top,left,bottom,right, retval
     defb $06,$03,$06,25,1
     defb $07,$03,$07,25,2
+    defb $08,$03,$08,25,3
     defb $FF                    ;terminator
 ;*************************************************************
 ; Ask difficulty level dialog.
 ;*************************************************************
 AskDifficultyLevel:
     LD DE,$0101
-    LD BC,$0719
+    LD BC,$0819
     CALL DRAWBOX
     CALL display_message
     defb 01001111b,$03,$03,"Select Difficulty level",$ff
@@ -1202,6 +1204,8 @@ AskDifficultyLevel:
     defb 01111000b,$06,$04,"Med  (16x16) 30 mines",$ff
     CALL display_message
     defb 01111000b,$07,$04,"Hard (19x28) 60 mines",$ff
+    CALL display_message
+    defb 01111000b,$08,$04,"Select controls      ",$ff
 
 ;Preset the mouse pointer to somewere visible.
     ld a,$18
@@ -1213,8 +1217,16 @@ AskDifficultyLevel:
 adl_loop:
     ld hl,ADL_boxes
     call do_mouse_WaitForSelection
+    cp 3
+    jr nz,adl_selected
+;Select controls selected
+    call mouse_off
+    pop hl
+    jp Go_again_ask_input
+    
 
-;Convert the number (1-3) to an address
+adl_selected:
+;Convert the number (0-2) to an address
     ld hl, DifficultyArray
     ld b,a      ;Multiply Ax3
     add a,a     
@@ -1321,7 +1333,7 @@ numkey_notpressed:
 ;*************************************************************
 AskInputMethod:
     LD DE,$0101
-    LD BC,$0a1c
+    LD BC,$0b1c
     CALL DRAWBOX
     CALL display_message
     defb 01001111b,$03,$03,"Control Method            ",$ff
@@ -1335,11 +1347,14 @@ AskInputMethod:
     defb 01111000b,$08,$04,"4. Kempston Joystick",$ff
     CALL display_message
     defb 01111000b,$09,$04,"5. Cursor keys",$ff
+    CALL display_message
+    defb 01111000b,$0a,$04,"6. Define keys",$ff
 
 ami_loop:
     call NUMBERKEY_TO_A     ;Get number
     jr nc,ami_loop          ;If no button pressed, do again
     cp 6                    ;Number > 5?
+    jp z,selectkeys         ;6 - define keys
     jr nc,ami_loop          ;Again
 
     dec a                   ;1-5 -> 0-4
@@ -1379,7 +1394,7 @@ mainboom_goagain:
     pop af
 
     inc h               ;new height +2
-    inc h
+    inc h 
     inc l               ;new width +2
     inc l
 
@@ -1549,6 +1564,219 @@ mck_loop2:
     out ($fe),a
     
     ret
+;*************************************************************
+; Wait for no key to be pressed.
+;*************************************************************
+wait_for_key_release:
+    push bc
+wfkr_Loop:
+    ld bc,$00fe
+    in a,(c)
+    or 11100000b
+    cp $FF
+    jr nz,wfkr_Loop
+    pop bc
+    ret
 
+;*************************************************************
+; wait for a key to be pressed
+; b= port, c=mask, hl=stringptr, d=length
+;*************************************************************
+wait_for_key:
+;First, loop through all the keyboard ports until something is pressed.
+    ld bc,$fefe     ;first port
+wfk_next:
+    in a,(c)        ;read port
+    cpl             ;keys are active low so invert them
+    and 00011111b   ;mask out the bits we are interested in. (5 keys per row)
+    cp 0            ;Nothing pressed?
+    jr nz,decodekey ;If something is pressed, decode it.
+    rlc b           ;Shift to the next port
+    jr wfk_next     ;next
+
+;Now decode the key into a string. 
+decodekey:
+    ld c,a           ;the pressed bit to "C" for the mask.
+    push bc          ;preserve port and mask as we will be returning them later
+
+;convert the mask into a bit number in D from 0-4
+    ld d,0
+wfk_next1:
+    inc d
+    rrca
+    jr nc,wfk_next1
+    dec d
+
+;convert Port number into a bit number in E from 0-7
+    ld a,b
+    ld e,0
+wfk_next2:
+    inc e
+    rrca
+    jr c,wfk_next2
+    dec e
+
+;Now convert port num and mask num into a key number from 0-39. This is 
+;portnum * 5 + mask num
+
+;Multiply Port number by 5
+    ld a,e  
+    add a   ;a=a*2
+    add a   ;a=a*4
+    add e   ;a=a*5
+    add d   ; add d
+
+;Next, lookup the key.    
+    ld c,a
+    ld b,0
+    ld hl, KeylookupTable
+    add hl,bc
+
+;get keycode and check for special
+    ld d,1      ;default length = 1
+    ld a,(hl)   ;get keycode
+    cp $F0      ;special?
+    jr c,keyloopup_notspecial   ;nope, just return HL and DE as is.
+
+
+    sub $FC     ;subtract the first special key
+    
+;multiply the key by 5
+    ld e,a
+    add a
+    add a
+    add e
+    
+; Add in the start of the special key table.    
+    ld b,0              ;a->bc
+    ld c,a
+    ld hl, SPECIALKEY   ;text table
+    add hl,bc           
+    ld d,5              ;all special keys are 5 bytes long
+keyloopup_notspecial:
+    pop bc              ;get back port and mask
+
+    ret
+
+;*************************************************************
+;Lookup text table for the text keys.
+;*************************************************************
+KeylookupTable:
+    defb $FF,"ZXCV"
+    defb "ASDFG"
+    defb "QWERT"
+    defb "12345"
+    defb "09876"
+    defb "POIUY"
+    defb $FE,"LKJH"
+    defb $FD,$FC,"MNB"
+
+;***********************************************************
+;Strings for the "Special" keys
+;***********************************************************
+SPECIALKEY:
+    defb "SYMB ","SPACE","ENTER","CAPS "
+
+;************************************************************
+;Display a string with a given length.
+; hl = address, DE = xy  c=length b=attribute
+;************************************************************
+DisplayString:
+    
+ds_loop:
+    ld a,(hl)           ;get character code
+    push hl
+    push de
+    push bc
+    call DisplayASCII   ;display character
+    pop bc
+    pop de
+    pop hl
+    inc hl              ;next character
+    inc e               ;next character in line
+    dec c               
+    jr nz,ds_loop       ;jump back if we have more
+    ret
+
+;*************************************************************
+;Implement the select key dialog.
+; What the mouse handler expects is 6 port,mask pairs in the 
+; order: down,up,right,left, lmb, rmb
+;*************************************************************
+selectkeys:
+;Draw a box from 1,1 to 13,28 inclusive
+    LD DE,$0101     
+    LD BC,$0d1c
+    CALL DRAWBOX
+
+;Display the title.
+    CALL display_message
+    defb 01001111b,$03,$03,"Define keys               ",$ff
+
+;Now ask for each input in turn.
+    call wait_for_key_release   ;wait for the key to be un-pressed
+    ld de,$0505             ;X/Y of the first entry
+    ld b,01111001b          ;Attribute, bright 1, paper 7, ink 1
+    ld c,8                  ;Number of characters in each prompt
+    ld hl,DirectionStrings  ;Start of the strings (each 8 bits)
+    ld a,6                  ;Number of keys to ask for.
+    ld ix,mouse_keys        ;Location of the mouse port/mask pairs
+
+selectkey_loop:
+    push af                 ;preserve all details.
+    push de
+    push bc
+    push hl
+    push de
+;Prompt and wait for the user to press a key
+    call DisplayString      ;display the next prompt      
+    call wait_for_key       ;wait for a key to be pressed
+;set the port/mask pair
+    ld (ix+0),b             
+    ld (ix+1),c
+    inc ix                  ;point at the next port/mask pair
+    inc ix    
+
+;display what the user pressed,
+    ld c,d                  ;d contains string length
+    ld b, 01111001b         ;Attribute, Bright 1, paper 7, ink 1
+    pop de                  ;get back the X/Y
+    ld e,$d                 ;and set the Y to 10
+    call DisplayString      ;display the string returned by WaitForKey
+
+    call wait_for_key_release   ;wait for the key to be un-pressed
+    pop hl                  ;get back string location
+    ld bc,$0008             ;point to next location
+    add hl,bc
+
+    pop bc                  ;get back attribute and length
+    pop de                  ;get back XY
+    inc d                   ;increment line
+    pop af                  ;get counter
+    dec a                   
+    jr nz,selectkey_loop    ;loop back if nessesary
+
+;Ask the user to confirm if they keys are ok.
+    CALL display_message
+    defb 11001110b,$0C,$04,"Are these keys ok? (Y/N)",$ff
+
+
+waitforyesno:
+    call wait_for_key       ;wait for a key to be pressed
+    ld a,(hl)               ;Get the decoded key
+    cp 'N'                  ;if its "N" loop back for another go
+    jp z,selectkeys         
+    cp 'Y'                  ;if its "Y" go to "Done"
+    jr z,askkeys_finish     
+    jr waitforyesno         ;any other key ignored
+
+
+askkeys_finish:
+    ld a,5
+    ld (mouse_input),a      ;Set mouse input flag to Keyboard.
+    ret
+
+DirectionStrings:
+    defb "Down:   ","Up:     ","Right:  ","Left:   ","Mark:   ","Select: "
 
 

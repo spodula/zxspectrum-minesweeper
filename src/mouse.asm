@@ -17,20 +17,22 @@
 ;*              2: Sinclair IF/2 port 2                            *
 ;*              3: Kempston                                        *
 ;*              4: Cursor keys  (requires shift)                   *
+;*              5: Keyboard                                        *
 ;*  Setting Bit 3 (Ie, adding 8) will set +mouse mode,             *
 ;*  Eg,         9: Mouse + IF/2 p1                                 * 
 ;*             10: Mouse + IF/2 p2                                 * 
 ;*             11: Mouse + Kempston                                * 
 ;*             12: Mouse + Cursors (requires shift)                *
-; * NOTE, Space is used for the RMB in all methods except for 0    * 
+;*             13: Mouse + keyboard                                *
+;* NOTE, Space is used for the RMB in all methods except for 0 + 5 * 
 ;*                                                                 *
 ;* NOTES:                                                          *
 ;*   If you are outputting to the screen, its best to turn cursor  *
 ;*      off to avoid corrupting the screen when the cursor redraws *
 ;*      the background.                                            *
 ;*   If you want to use your own interrupt handler and just add    *
-;*      this, just put in a call to MOUSE_INTERRUPT2 ($bc4c)       *
-;*      to preserve interrupts or  MOUSE_HANDLER ($bc6e) if you    *
+;*      this, just put in a call to MOUSE_INTERRUPT2 ($bc73)       *
+;*      to preserve interrupts or  MOUSE_HANDLER ($bc76) if you    *
 ;*      are already saving interrupts.                             *
 ;*                                                                 *
 ;*                                                                 *
@@ -78,7 +80,17 @@ lastread:
 MOUSELOC:
     defb 96,128         ;Actual Y/X location
 INPUTMODE: 
-    defb 12             ;Input mode. (See notes)
+    defb 2             ;Input mode. (See notes)
+;Defined keys. These are in the format: PortLSB, bit
+REDEFKEYS:      
+    defb $fd,00000001b ;Down  V   default: A
+    defb $fb,00000001b ;UP    ^   default: Q
+    defb $df,00000010b ;Right <-  default: O
+    defb $df,00000001b ;Left  ->  default: P
+BUTTONS:
+    defb $bf,00000001b ;RMB       default: Enter
+    defb $7f,00000001b ;LMB       default: Space
+    
 
 ;*****************************************************************
 ; Disable the mouse cursor. 
@@ -108,7 +120,7 @@ INTERRUPT_SETUP:
     LD BC,4
     LDIR
 ;Display the cursor
-    ld hl,MOUSEDIFF+4
+    ld hl,MOUSELOC
     ld d,(hl)
     inc hl
     ld e,(hl)
@@ -205,6 +217,7 @@ check_X_done:
     ret
 
 ;****************************************************
+;Display the cursor at the X/Y address
 ;DE = xy
 ;****************************************************
 DISPLAYCURSOR:
@@ -352,6 +365,7 @@ skipundo:
 
 
 ;****************************************************
+;Variables.
 ;****************************************************
 pxflags:
     defb $0          ;Used to store if we have displayed the cursor
@@ -439,13 +453,15 @@ GET_MOUSEBUTTONS:
     ld a,(INPUTMODE)        ;Get input mode
     and 00000111b           ;Mask out the plus mouse mode
     cp 1
-    jr Z,GET_ZEROKEY
+    jr Z,GET_SINCLAIR1CURSOR
     cp 2
     jr Z,GET_SINCLAIR2
     cp 3
     jr Z,GET_KEMPSTON
     cp 4
-    jr Z,GET_ZEROKEY    ;Cursor Fire is "0"key. Same as Sinclair IF/2 pt 1
+    jr Z,GET_SINCLAIR1CURSOR
+    cp 5
+    jr Z,GET_KEYBOARD
 ;Read directly from the mouse button port
     call GET_MOUSEBTN_DIRECTLY
 
@@ -472,45 +488,64 @@ GET_MOUSEBTN_DIRECTLY:
     cpl
     ret                     
 
-GET_ZEROKEY:            ;Check the zero key (Sinclair IF/1, Cursor)
-    ld bc,$EFFE
-    in a,(c)
-    cpl
-    rla
-    call GET_SPACE_TO_BIT0
-    jr GETMOUSEBTN_WRITEBTN
-
-GET_SINCLAIR2:          ;check fire key on IF/2 (button "5")
-    ld bc,$f7FE
-    in a,(c)
-    cpl
-Bit5Fire:               ;This checks Bit 5 of A
+;**********************************************************
+GET_KEMPSTON:       ;CHeck bit 5 in $1f
+    in a,($1f)      ;Extract fire button to bit 1
     rra
     rra 
     rra
     and $2
-    call GET_SPACE_TO_BIT0
-    jr GETMOUSEBTN_WRITEBTN
-
-GET_KEMPSTON:           ;CHeck bit 5 in $1f
-    in a,($1f)
-    jr Bit5Fire
-
-;**********************************************************
-; This function will return if space is pressed in bit 0
-; of A. It is used to emulate the RMB for all non-mouse input
-; methods.
-;**********************************************************
-GET_SPACE_TO_BIT0:
-    push af
+    ld d,a
     ld bc,$7FFE
     in a,(c)
     cpl
     and $01
-    ld c,a
-    pop af
-    or c 
-    ret
+    or d
+    jr GETMOUSEBTN_WRITEBTN
+
+;**********************************************************
+GET_SINCLAIR1CURSOR:          ;check fire key on IF/2 (button "0")
+    ld hl,SINCLAIR1CURSOR_buttons
+    jr get_keys
+
+SINCLAIR1CURSOR_buttons:
+    defb $EF,0000001b   ;0
+    defb $7f,0000001b   ;space
+
+;**********************************************************
+GET_SINCLAIR2:          ;check fire key on IF/2 (button "5")
+    ld hl,SINCLAIR2_buttons
+    jr get_keys
+
+SINCLAIR2_buttons:
+    defb $f7,0010000b   ;5
+    defb $7f,0000001b   ;space
+;**********************************************************
+;Get the fire and menu buttons for all keyboard based inputs
+;**********************************************************
+GET_KEYBOARD:
+    ld hl,BUTTONS
+get_keys:
+    ld d,0
+    ld c,$fe
+
+    ld b,(hl)
+    inc hl
+    in a,(c)
+    and (hl)    
+    jr nz,gkb_next1
+    set 0,d
+gkb_next1:
+    inc hl
+    ld b,(hl)
+    inc hl
+    in a,(c)
+    and (hl)    
+    jr nz,gkb_next2
+    set 1,d
+gkb_next2:
+    ld a,d
+    jr GETMOUSEBTN_WRITEBTN
     
 ;**********************************************************
 ; Decode the mouse differential input. 
@@ -536,117 +571,52 @@ MOUSEINPUT:
 ;This will also deal with plus mouse mode.
 ;****************************************************
 DoControllerInput:
-    ld hl,MOUSEDIFF    
-    ld a,(INPUTMODE)
-    and 00000111b
-    cp 1
+    ld hl,MOUSEDIFF         ;Address of the differential variables
+    ld a,(INPUTMODE)        ;get input mode
+    and 00000111b           ;mask out base type
+    cp 1                    ;Sinclair 1
     jr z,SINCLAIR1INPUT
-    cp 2
+    cp 2                    ;Sinclair 2
     jr z,SINCLAIR2INPUT
-    cp 3
+    cp 3                    ;Kempston
     jr z,KEMPSTONINPUT
-    cp 4
+    cp 4                    ;Cursor
     jr z,CURSORINPUT
-    CP 0
+    cp 5                    ;redefined keys
+    jr z,KEYBOARDINPUT
+    CP 0                    ;Mouse.    
     jr z,dnmi_mouseonly
-dnmi_FinshedInput:
-    ld a,(INPUTMODE)
+
+dnmi_FinshedInput:          
+    ld a,(INPUTMODE)        ;Do we have the "x+mouse mode?"
     bit 3,a
-    jr z,dnmi_NotPlusMousemode   
-dnmi_mouseonly:
-    ld h,(ix+0)
+    ret z                   ;If not we are done.
+
+dnmi_mouseonly:             ;merge the mouse input with the keyboard input
+    ld h,(ix+0)             ;Store the diffs created by non-mouse input->hl
     ld l,(ix+1)
-    call MOUSEINPUT
-    ld a,h
+    call MOUSEINPUT         ;get mouse modificaitons
+    ld a,h                  ;add in the keyboard input to the diffs part 1
     add (ix+0)
     ld (ix+0),a
-    ld a,l
+
+    ld a,l                  ;add in the keyboard input to the diffs part 2
     add (ix+1)
     ld (ix+1),a
 
-dnmi_NotPlusMousemode:
     ret
 
 dnmi_Double_nonmouse:
 ;Double the X and Y differences.
     ld a,(ix+0)
-    SLA a
+    sla a
     ld (ix+0),a
 
     inc hl
     ld a,(ix+1)
-    SLA a
+    sla a
     ld (ix+1),a
     jr dnmi_FinshedInput
-
-;**********************************************************
-;Decode the Sinclair port 1 (6-0)
-; This is port $EFFE. 
-;*Bit 43210
-;*    00000
-;*    ||||+----Fire   X
-;*    |||+-----Up     ^
-;*    ||+------Down   V
-;*    |+-------Right  =>
-;*    +--------Left   <=
-;**********************************************************
-SINCLAIR1INPUT:
-    ld bc,$EFFE
-    in a,(c)
-    rra
-    rra
-    JR c,s1skip1
-    inc (hl)    
-s1skip1:
-    rra
-    JR c,s1skip2
-    dec (hl)    
-s1skip2:
-    inc hl
-    RRA
-    JR c,s1skip3
-    inc (hl)    
-s1skip3:
-    RRA
-    JR c,s1skip4
-    dec (hl)    
-s1skip4:
-    jr dnmi_Double_nonmouse
-
-;**********************************************************
-;Decode the Sinclair port 2 (1-5)
-; This is port $F7FE. 
-;*Bit 43210
-;*    00000
-;*    ||||+----Left   <=
-;*    |||+-----Right  =>
-;*    ||+------Down   V
-;*    |+-------Up     ^
-;*    +--------Fire   X
-;**********************************************************
-SINCLAIR2INPUT:
-    ld bc,$F7FE
-    in a,(c)
-    cpl
-    rra
-    inc hl
-    jr c,s2skip1
-    dec (hl)    
-s2skip1:
-    rra
-    jr c,s2skip2
-    inc (hl)    
-s2skip2:
-    dec hl
-    rra
-    jr c,s2skip3
-    dec (hl)    
-s2skip3:
-    rra
-    jr c,s2skip4
-    inc (hl)    
-s2skip4:
-    jr dnmi_Double_nonmouse
 
 ;**********************************************************
 ;Decode the kempston port.
@@ -683,6 +653,50 @@ kempskip4:
     jr dnmi_Double_nonmouse
 
 ;**********************************************************
+;Decode the Sinclair port 1 (6-0)
+; This is port $EFFE. 
+;*Bit 43210
+;*    00000
+;*    ||||+----Fire   X
+;*    |||+-----Up     ^
+;*    ||+------Down   V
+;*    |+-------Right  =>
+;*    +--------Left   <=
+;**********************************************************
+SINCLAIR1INPUT:
+;Now check each key
+    ld de,SINCLAIR1
+    jr FIXEDKEYS
+
+SINCLAIR1: 
+    defb $ef,00000100b  ; down
+    defb $ef,00000010b  ; up
+    defb $ef,00010000b  ; <=
+    defb $ef,00001000b  ; =>
+
+;**********************************************************
+;Decode the Sinclair port 2 (1-5)
+; This is port $F7FE. 
+;*Bit 43210
+;*    00000
+;*    ||||+----Left   <=
+;*    |||+-----Right  =>
+;*    ||+------Down   V
+;*    |+-------Up     ^
+;*    +--------Fire   X
+;**********************************************************
+SINCLAIR2INPUT:
+;Now check each key
+    ld de,SINCLAIR2
+    jr FIXEDKEYS
+
+SINCLAIR2: 
+    defb $f7,00000100b  ; down
+    defb $f7,00001000b  ; up
+    defb $f7,00000001b  ; <=
+    defb $f7,00000010b  ; =>
+
+;**********************************************************
 ;Decode cursor keys. These are:
 ; 7ffe bit 5 = "5" <= 
 ; effe bit 5 = "6" down
@@ -697,29 +711,75 @@ CURSORINPUT:
     jr c,kempskip4
 
 ;Now check each key
-    inc hl
-    ld bc,$F7FE         ;Check "5"
-    in a,(c)
-    bit 4,a
-    jr nz,cursskip1
-    dec (hl)    
-cursskip1:
-    ld bc,$effe    
-    in a,(c)
-    rra             ;shift 8-> carry flag
-    rra
-    rra         
-    jr c,cursskip2
-    inc (hl)
-cursskip2:
-    dec hl
-    rra             ;shift 7-> carry flag
-    jr c,cursskip3
-    inc (hl)
-cursskip3:
-    rra             ;shift 6-> carry flag
-    jr c,cursskip4
-    dec (hl)
-cursskip4:
+    ld de,CURSORKEYS
+    jr FIXEDKEYS
+
+CURSORKEYS: 
+    defb $ef,00010000b  ; down
+    defb $ef,00001000b  ; up
+    defb $f7,00010000b  ; <=
+    defb $ef,00000100b  ; =>
+
+;**********************************************************
+;decode keyboard. 
+;These defualt to QAOP
+;**********************************************************
+KEYBOARDINPUT:
+    ld DE,REDEFKEYS    ;point to defined keys
+;**********************************************************
+;This is a generic input for for the keyboard input. 
+; it expects a table of keys in the format portMSB, Bit mask
+; with 5 entries in the order:
+;       down, up, left,right
+; HL will contain address of mouse differential variables.
+;**********************************************************
+FIXEDKEYS:
+    ex de,hl           
+    ld c,$fe            ;default ports are $xxFE
+
+    ld b,(hl)           ;get the port
+    inc hl              ;next address
+    in a,(c)            ;read the data on this port
+    and (hl)            ;mask out the bit required
+    jr nz,keyin_next1   ;if set (keys are active low), skip.
+    ld a,(de)           ;(de) = (de)-1
+    dec a
+    ld (de),a
+keyin_next1:    
+    inc hl              ;Next port to read
+    ld b,(hl)           ;get port
+    inc hl              ;point at next
+    in a,(c)            ;read in data       
+    and (hl)            ;mask out bit required
+    jr nz,keyin_next2   ;if not pressed, skip
+    ld a,(de)           ;(de) = (de) + 1
+    inc a
+    ld (de),a
+keyin_next2:
+    inc hl              ;Next port to read
+    inc de              ;Point at the second differential variable. (Horezontal)
+    ld b,(hl)           ;get port
+    inc hl              ;point at next
+    in a,(c)            ;read in data       
+    and (hl)            ;mask out bit required
+    jr nz,keyin_next3   ;if not pressed, skip
+    ld a,(de)           ;(de) = (de)-1
+    dec a
+    ld (de),a
+keyin_next3:
+    inc hl              ;Next port to read
+    ld b,(hl)           ;get port
+    inc hl              ;point at next
+    in a,(c)            ;read in data       
+    and (hl)            ;mask out bit required  
+    jr nz,keyin_next4   ;if not pressed, skip
+    ld a,(de)           ;(de) = (de) + 1
+    inc a
+    ld (de),a
+keyin_next4: 
     jr kempskip4
 
+
+
+    
+    
